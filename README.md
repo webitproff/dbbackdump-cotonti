@@ -1,4 +1,1182 @@
 
+# DB Backup (dbbackdump) for Cotonti
+
+[![Version](https://img.shields.io/badge/version-3.0.1-blue.svg)](https://github.com/webitproff/dbbackdump-cotonti)
+[![Cotonti Compatibility](https://img.shields.io/badge/Cotonti-Verona%201.0-orange.svg)](https://github.com/Cotonti/Cotonti)
+[![PHP](https://img.shields.io/badge/PHP-8.5-purple.svg)](https://www.php.net/releases/8_5_6.php)
+[![License](https://img.shields.io/badge/license-BSD--3--Clause-lightgrey.svg)](https://github.com/webitproff/dbbackdump-cotonti/blob/master/License.txt)
+
+A modern database backup and restore plugin for Cotonti CMS. Runs in a single process, supports two engines (native `mysqldump` and pure PHP), handles large databases correctly, shows real-time progress, and does not bring down the site during dumps of tens of gigabytes.
+
+---
+
+## 📑 Table of Contents
+
+- [1. General Information](#1-general-information)
+  - [1.1. What is dbbackdump](#11-what-is-dbbackdump)
+  - [1.2. Key Features](#12-key-features)
+  - [1.3. System Requirements](#13-system-requirements)
+  - [1.4. Compatibility](#14-compatibility)
+  - [1.5. License](#15-license)
+- [2. How It Works](#2-how-it-works)
+  - [2.1. Overall Architecture](#21-overall-architecture)
+  - [2.2. Plugin Structure](#22-plugin-structure)
+  - [2.3. Two Backup Engines](#23-two-backup-engines)
+  - [2.4. Backup File Format](#24-backup-file-format)
+  - [2.5. Backup Creation Process](#25-backup-creation-process)
+  - [2.6. Restore Process](#26-restore-process)
+  - [2.7. State System (.job.json)](#27-state-system-jobjson)
+  - [2.8. AJAX API](#28-ajax-api)
+  - [2.9. Logging](#29-logging)
+  - [2.10. Backup Rotation](#210-backup-rotation)
+- [3. Usage Rules](#3-usage-rules)
+  - [3.1. Access Rights](#31-access-rights)
+  - [3.2. Limitations](#32-limitations)
+  - [3.3. Operational Recommendations](#33-operational-recommendations)
+  - [3.4. What You Must Never Do](#34-what-you-must-never-do)
+- [4. Step-by-Step Installation Guide](#4-step-by-step-installation-guide)
+  - [4.1. Method 1: via Cotonti Admin Panel](#41-method-1-via-cotonti-admin-panel)
+  - [4.2. Method 2: manually via FTP/SFTP](#42-method-2-manually-via-ftpsftp)
+  - [4.3. Setting Permissions](#43-setting-permissions)
+  - [4.4. Configuring the Plugin](#44-configuring-the-plugin)
+  - [4.5. Verifying Operation](#45-verifying-operation)
+- [5. Step-by-Step Security Guide](#5-step-by-step-security-guide)
+  - [5.1. Step 1: Choosing Backup Storage Location](#51-step-1-choosing-backup-storage-location)
+  - [5.2. Step 2: Protecting the Backup Directory](#52-step-2-protecting-the-backup-directory)
+  - [5.3. Step 3: File Permissions](#53-step-3-file-permissions)
+  - [5.4. Step 4: Protecting the AJAX Endpoint](#54-step-4-protecting-the-ajax-endpoint)
+  - [5.5. Step 5: XK Tokens and CSRF](#55-step-5-xk-tokens-and-csrf)
+  - [5.6. Step 6: Separate MySQL User](#56-step-6-separate-mysql-user)
+  - [5.7. Step 7: mysqldump Security](#57-step-7-mysqldump-security)
+  - [5.8. Step 8: HTTPS and Headers](#58-step-8-https-and-headers)
+  - [5.9. Step 9: Regular Audit](#59-step-9-regular-audit)
+  - [5.10. Step 10: Backing Up Your Backups](#510-step-10-backing-up-your-backups)
+- [6. Step-by-Step Usage Guide](#6-step-by-step-usage-guide)
+  - [6.1. Creating a Backup](#61-creating-a-backup)
+  - [6.2. Downloading a Backup](#62-downloading-a-backup)
+  - [6.3. Restoring from a Backup](#63-restoring-from-a-backup)
+  - [6.4. Deleting a Backup](#64-deleting-a-backup)
+  - [6.5. Cancelling an Operation](#65-cancelling-an-operation)
+- [7. Possible Problems and Solutions](#7-possible-problems-and-solutions)
+  - [7.1. Plugin Does Not Create Backup Directory](#71-plugin-does-not-create-backup-directory)
+  - [7.2. mysqldump Not Found](#72-mysqldump-not-found)
+  - [7.3. Timeout and Connection Drop](#73-timeout-and-connection-drop)
+  - [7.4. Large Databases](#74-large-databases)
+  - [7.5. Error 500 During Dump](#75-error-500-during-dump)
+  - [7.6. Tables Not Restored](#76-tables-not-restored)
+  - [7.7. Memory Limit Exceeded](#77-memory-limit-exceeded)
+  - [7.8. Garbled Characters Instead of Cyrillic](#78-garbled-characters-instead-of-cyrillic)
+  - [7.9. Interrupted Dump Still Hanging](#79-interrupted-dump-still-hanging)
+  - [7.10. Progress Bar Not Moving](#710-progress-bar-not-moving)
+- [8. Logs and Diagnostics](#8-logs-and-diagnostics)
+- [9. FAQ — Frequently Asked Questions](#9-faq--frequently-asked-questions)
+- [10. Plugin Update](#10-plugin-update)
+- [11. Plugin Removal](#11-plugin-removal)
+- [12. Roadmap](#12-roadmap)
+- [13. Changelog](#13-changelog)
+- [14. Contributing](#14-contributing)
+- [15. License](#15-license)
+- [16. Contacts and Support](#16-contacts-and-support)
+
+---
+
+## 1. General Information
+
+### 1.1. What is dbbackdump
+
+**dbbackdump** is a plugin for [Cotonti](https://github.com/Cotonti/Cotonti/) CMS that allows a site administrator to create, download, restore, and delete MySQL database backups directly from the admin panel, without needing to access the server via SSH, use phpMyAdmin, or third-party tools.
+
+The plugin was developed as a "modern replacement" for outdated database backup solutions that:
+
+- load the entire database into memory → fail on large databases;
+- do not show progress → admin doesn't know if the operation is working;
+- do not allow cancelling the operation → you have to wait for a timeout;
+- do not support streaming restore → consume all memory during restore;
+- cannot work with `mysqldump` → slow and incomplete.
+
+**dbbackdump** solves all these problems.
+
+### 1.2. Key Features
+
+- **Two dump engines:**
+  - *native* — uses system `mysqldump` via `proc_open()` and immediately compresses the stream to gzip;
+  - *pure-PHP* — if `mysqldump` is unavailable, dumps tables using a cursor by PRIMARY KEY in batches of 1000 rows;
+- **Streaming restore** — gzip is read in 512 KB chunks, SQL queries are parsed on the fly without loading the entire dump into memory;
+- **Real-time progress** — via AJAX polling of the `.job.json` state;
+- **Operation cancellation** — the "Cancel" button interrupts dump/restore mid-way;
+- **Backup rotation** — automatic deletion of old copies based on the `keep_backups` setting;
+- **File protection** — `.htaccess` + `index.php` are created automatically in the backup folder;
+- **Security** — Cotonti authorization + XK token verification on every AJAX request;
+- **Logging** — all errors are written to `.log` inside the backup folder with a truncated SQL tail.
+
+### 1.3. System Requirements
+
+| Component | Minimum Version | Recommended |
+|-----------|-----------------|-------------|
+| PHP       | 8.5             | 8.5+        |
+| MySQL     | 8.0             | 8.4+        |
+| MariaDB   | 10.6            | 11.4+       |
+| Cotonti   | Verona 1.0.0    | Verona 1.0.0+ |
+| PHP Extensions | pdo_mysql, zlib | + proc_open, exec |
+
+**Required PHP extensions:**
+- `pdo_mysql` — required, otherwise Cotonti won't work;
+- `zlib` — required, without it there will be no gzip compression;
+- `mbstring` — for truncating long SQL errors in the log;
+- `json` — built into PHP ≥ 8.0.
+
+**Optional extensions / functions:**
+- `proc_open` — needed for native `mysqldump` mode;
+- `exec` — needed for checking `mysqldump` version;
+- `ignore_user_abort` — needed to continue working after closing the tab.
+
+If `proc_open`/`exec` are disabled by the hosting, the plugin automatically switches to the pure-PHP engine.
+
+**Important:** the plugin uses the `Pdo\Mysql` class (new PHP 8.5 API). It will not work on PHP 8.4 and below.
+
+### 1.4. Compatibility
+
+The plugin has been tested on:
+
+- **Cotonti Verona** 1.0.0+;
+- **MySQL** 8.0, 8.4;
+- **MariaDB** 10.6 — 11.4;
+- **PHP** 8.5;
+- **Apache** 2.4, **Nginx** (with php-fpm), **LiteSpeed**.
+
+### 1.5. License
+
+BSD 3-Clause. Full text is in the `License.txt` file.
+
+---
+
+## 2. How It Works
+
+### 2.1. Overall Architecture
+
+The plugin consists of four main parts:
+
+1. **Admin page** (`dbbackdump.admin.php` + template) — UI, buttons, backup table.
+2. **AJAX endpoint** (`dbbackdump.ajax.php`) — handler for all asynchronous requests.
+3. **Function library** (`inc/dbbackdump.functions.php`) — all logic.
+4. **State file** (`.job.json` in the backup folder) — the "bridge" between the long-running process and AJAX polling.
+
+Key idea: **everything runs in a single PHP process**. The plugin does not use cron, queues, forks, or background workers. Dump/restore is started directly inside the AJAX request `start_dump`/`start_restore`, and progress is written to the `.job.json` file, which is simultaneously read by other AJAX requests `status`.
+
+This provides:
+
+- **ease of installation** — no need to configure cron or daemons;
+- **portability** — works on any shared hosting with PHP;
+- **transparency** — easy to debug, all actions are visible in the log.
+
+### 2.2. Plugin Structure
+
+```
+plugins/dbbackdump/
+├── dbbackdump.setup.php        # plugin registration and configuration
+├── dbbackdump.admin.php        # admin page controller
+├── dbbackdump.ajax.php         # AJAX endpoint
+├── inc/
+│   └── dbbackdump.functions.php  # plugin core
+├── lang/
+│   ├── dbbackdump.ru.lang.php    # Russian localization
+│   └── dbbackdump.en.lang.php    # English localization
+├── tpl/
+│   └── dbbackdump.admin.tpl      # admin page template
+└── README.md                     # this file
+```
+
+### 2.3. Two Backup Engines
+
+#### 2.3.1. Native — `mysqldump`
+
+Used if:
+- the `prefer_mysqldump` option is enabled;
+- a valid binary is specified in `mysqldump_path`;
+- the `exec()` function is allowed on the hosting.
+
+Algorithm:
+1. `mysqldump` is launched via `proc_open()` with flags `--single-transaction --quick --routines --triggers --hex-blob --default-character-set=utf8mb4`.
+2. The password is passed via the `MYSQL_PWD` environment variable — this prevents the password from appearing in `ps aux`.
+3. The process stdout is read in 128 KB chunks.
+4. Each chunk is immediately written to the gzip file.
+5. stderr is read separately after the process completes, and an exception is thrown on non-zero exit code.
+
+**Pros:** speed, support for routines, triggers, events, correct escaping.
+
+**Cons:** requires `exec` and `proc_open`; requires `mysqldump` on the server; client version must be ≥ server version.
+
+#### 2.3.2. Pure-PHP — cursor by PRIMARY KEY
+
+Used if `mysqldump` is unavailable.
+
+Algorithm:
+1. Get the list of tables via `SHOW TABLES`.
+2. For each table:
+   - write `DROP TABLE IF EXISTS`;
+   - write the result of `SHOW CREATE TABLE`;
+   - determine the PRIMARY KEY (`SHOW KEYS FROM ... WHERE Key_name='PRIMARY'`);
+   - read rows in batches of 1000 sorted by PK;
+   - for the next batch use `WHERE pk > last_value` — this protects against "window shifting" during concurrent writes;
+   - write `INSERT INTO ... VALUES (...), (...), ...;`
+3. If a table has no PRIMARY KEY — read everything in one `SELECT`, but this is dangerous on large tables.
+
+**Pros:** works anywhere PHP is available; no `mysqldump` needed.
+
+**Cons:** slower; does not preserve triggers, events, routines; worse for tables without PRIMARY KEY; may be slow for full-text tables with heavy data.
+
+### 2.4. Backup File Format
+
+The file is a standard gzip-compressed SQL dump compatible with:
+
+- `mysql < backup.sql`;
+- `gunzip < backup.sql.gz | mysql dbname`;
+- phpMyAdmin (import);
+- Adminer;
+- any other SQL client.
+
+Dump header:
+
+```sql
+-- Cotonti DB Backup (pure-PHP cursor)
+-- 2026-10-16T12:34:56+00:00
+-- DB: my_database
+
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS=0;
+SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';
+SET time_zone='+00:00';
+```
+
+Then tables follow, and at the end:
+
+```sql
+SET FOREIGN_KEY_CHECKS=1;
+```
+
+Filename: `backup_YYYY-MM-DD_HH-II-SS.sql.gz`.
+
+### 2.5. Backup Creation Process
+
+1. Admin clicks the "Create Backup" button.
+2. JS sends an AJAX request `a=start_dump` with the XK token.
+3. `dbbackdump_start_dump()`:
+   - checks if another process is already running (reads `.job.json`);
+   - sets `ignore_user_abort(true)`, `set_time_limit(0)`, `memory_limit=1024M`;
+   - generates the filename and opens gzip;
+   - writes the initial state to `.job.json` (`status=running`);
+   - selects the engine (mysqldump or pure-PHP);
+   - performs the dump;
+   - upon completion calls `dbbackdump_rotate()` — deletes old copies;
+   - writes the `done` state to `.job.json`.
+4. In parallel, JS polls `a=status` every 1200 ms and updates the progress bar.
+5. Upon completion, JS reloads the page.
+
+### 2.6. Restore Process
+
+Restore is the most complex part because it needs to:
+
+- not load the entire `.sql.gz` into memory;
+- correctly parse SQL taking into account quotes, escaping, multi-line strings, and `;` inside `INSERT`;
+- show progress as the file is read;
+- be able to interrupt when "Cancel" is pressed.
+
+Algorithm of `dbbackdump_run_restore()`:
+
+1. Sets `FOREIGN_KEY_CHECKS=0`, `NAMES utf8mb4`, `SQL_MODE`.
+2. Opens `.sql.gz` via `fopen('compress.zlib://...')`.
+3. Reads in 512 KB chunks into a buffer.
+4. Scans the buffer character by character, tracking:
+   - `$inStr` — inside a single quote;
+   - `$inBt` — inside a backtick (table/column name);
+   - `$escape` — after `\`;
+   - `''` — as an escaped quote inside a string.
+5. As soon as a `;` is encountered outside a string and outside a backtick — all text before it is considered a query and executed via `Cot::$db->query($sql)`.
+6. The executed prefix is removed from the buffer (`substr($buffer, $i+1)`), and position `$i` is reset to 0.
+7. **Important:** `$i` is not reset when reading a new chunk — only after a query is successfully executed. Otherwise, quotes in the already-scanned part of the buffer are re-counted, `$inStr` gets stuck, `;` stops being recognized, and INSERTs are silently skipped.
+8. Every 50 executed queries:
+   - `.job.json` is updated (progress via `ftell($fh) / filesize($path)`);
+   - checks if the admin pressed "Cancel".
+9. Upon completion — `FOREIGN_KEY_CHECKS=1`.
+
+### 2.7. State System (.job.json)
+
+The `.job.json` file in the backup folder is the "bridge" between the long-running process and AJAX polling. Structure:
+
+```json
+{
+  "status":  "running",
+  "type":    "dump",
+  "file":    "backup_2026-10-16_12-34-56.sql.gz",
+  "percent": 42,
+  "message": "Table x92374_pages (12/35)",
+  "started": 1760618096,
+  "finished": null,
+  "error":   null
+}
+```
+
+Possible `status` values:
+
+| Status | Meaning |
+|--------|---------|
+| `running` | Operation is currently in progress |
+| `done` | Successfully completed |
+| `error` | Error, the `error` field contains the text |
+| `cancelled` | Cancelled by user |
+| *(absent)* | File doesn't exist → plugin considers nothing is running |
+
+### 2.8. AJAX API
+
+All requests go to `index.php?r=dbbackdump&a=<action>&x=<XK>`.
+
+| Action | Method | Parameters | Returns |
+|--------|--------|------------|---------|
+| `start_dump` | GET | — | `{status, percent, message}` |
+| `start_restore` | GET | `name=<file>` | `{status, percent, message}` |
+| `status` | GET | — | `{status, percent, message, file, error}` |
+| `cancel` | GET | — | `{ok: true}` |
+| `download` | GET | `name=<file>` | binary gzip |
+
+All responses (except `download`) are JSON:
+
+```json
+{ "ok": true, "data": { ... } }
+```
+
+or
+
+```json
+{ "ok": false, "error": "error text" }
+```
+
+### 2.9. Logging
+
+The `.log` file in the backup folder. Format:
+
+```
+2026-10-16T12:34:56+00:00 DUMP OK backup_2026-10-16_12-34-56.sql.gz
+2026-10-16T12:35:10+00:00 RESTORE OK backup_2026-10-16_12-34-56.sql.gz
+2026-10-16T12:36:22+00:00 SQL error: SQLSTATE[42S02]: Base table or view not found | SQL head: DROP TABLE IF EXISTS `foo`
+```
+
+**Rule:** if something goes wrong during restore — first look at `.log`.
+
+### 2.10. Backup Rotation
+
+After each successful dump, `dbbackdump_rotate()` is called. It reads the `keep_backups` config (default 14) and deletes all copies starting from the 15th (sorted by modification date, newest at top).
+
+If `keep_backups = 0` — rotation is disabled, copies accumulate.
+
+---
+
+## 3. Usage Rules
+
+### 3.1. Access Rights
+
+Only **Cotonti administrators** with the `plug.dbbackdump.A` permission have access to the plugin. This is checked in:
+
+- `dbbackdump.admin.php` — for the settings page;
+- `dbbackdump.ajax.php` — for all AJAX actions.
+
+A non-administrator will receive HTTP 403.
+
+### 3.2. Limitations
+
+- **One process at a time.** You cannot run two dumps in parallel — the second request will return the current status of the first.
+- **Only MySQL / MariaDB.** PostgreSQL, SQLite, etc. are not supported.
+- **Only `.sql.gz` in the backup folder.** Files with other extensions are not visible in the list and are not deleted.
+- **Only built-in gzip.** Formats `.zip`, `.bz2`, `.xz` are not supported.
+- **No automatic scheduling.** The plugin does not do backups via cron — this is a deliberate decision to avoid forgotten tasks. If needed — set up an external cron and call the AJAX or CLI script.
+
+### 3.3. Operational Recommendations
+
+- Keep `keep_backups` within reasonable limits. 14 copies is optimal for most sites.
+- Store an **external** copy: once a week download a fresh backup and store it on a separate medium / in the cloud / on another server.
+- Before updating Cotonti, installing new plugins, or making major changes — **always** make a backup.
+- Restore the database only during minimal load (at night), especially if you have many visitors.
+- Periodically check `.log` — there may be "silent" SQL errors.
+- Do not disable the built-in `.htaccess` and do not delete `index.php` from the backup folder.
+
+### 3.4. What You Must Never Do
+
+- ❌ **Delete `.htaccess` and `index.php`** from the backup folder.
+- ❌ **Place the backup folder inside `public_html`** without protection (`deny from all`).
+- ❌ **Set `backup_dir` with `777` permissions** — only `755` (or `750`, `770` depending on configuration).
+- ❌ **Run restore on a live site** — first enable maintenance mode.
+- ❌ **Use MySQL root** for the plugin — use a separate user with rights only to the required database.
+- ❌ **Interrupt a dump** via `killall php-fpm` or server reboot — you may get a corrupted `.sql.gz` (though the plugin will delete it on restart, it's better not to let it happen).
+- ❌ **Store backups only on the same disk** as the database — if the disk dies, both data and backups die.
+
+---
+
+## 4. Step-by-Step Installation Guide
+
+### 4.1. Method 1: via Cotonti Admin Panel
+
+1. **Download** the plugin archive from GitHub: `dbbackdump-cotonti-x.y.z.zip`.
+2. Log in to the Cotonti **admin panel** as administrator.
+3. Go to **Extensions → Manage Plugins** (`/admin.php?m=extensions`).
+4. Click **"Install new plugin"** or **"Upload plugin"**.
+5. Select the downloaded `.zip` and confirm installation.
+6. The plugin will appear in the list. If it is not activated automatically — click **"Install"**.
+7. Go to **Tools → DB Backup** (`/admin.php?m=other&p=dbbackdump`).
+
+### 4.2. Method 2: manually via FTP/SFTP
+
+1. Download the plugin from GitHub.
+2. Unpack the archive locally.
+3. Upload the `dbbackdump/` folder to `/plugins/` of your Cotonti site.
+4. Ensure the structure is as follows:
+   ```
+   /plugins/dbbackdump/dbbackdump.setup.php
+   /plugins/dbbackdump/dbbackdump.admin.php
+   /plugins/dbbackdump/dbbackdump.ajax.php
+   /plugins/dbbackdump/inc/dbbackdump.functions.php
+   /plugins/dbbackdump/lang/dbbackdump.ru.lang.php
+   /plugins/dbbackdump/lang/dbbackdump.en.lang.php
+   /plugins/dbbackdump/tpl/dbbackdump.admin.tpl
+   ```
+5. Log in to the Cotonti admin panel.
+6. Go to **Extensions → Manage Plugins**.
+7. Find `dbbackdump` in the list and click **"Install"**.
+8. Ensure the plugin is active.
+9. Go to **Tools → DB Backup**.
+
+### 4.3. Setting Permissions
+
+The plugin creates the backup folder automatically. By default, this is `datas/dbbackdump` relative to the site root. Permissions:
+
+```bash
+# via SSH
+chmod 755 /path/to/site/datas/dbbackdump
+chown www-data:www-data /path/to/site/datas/dbbackdump   # web server user
+```
+
+If hosting without SSH — use the **file manager** in the control panel and set permissions to `755`.
+
+If the folder **is not created automatically** — create it manually and set `755`.
+
+### 4.4. Configuring the Plugin
+
+Go to **Extensions → Manage Plugins → dbbackdump → Settings**. There are 4 parameters:
+
+| Parameter | Default Value | Description |
+|-----------|---------------|-------------|
+| `backup_dir` | `datas/dbbackdump` | Backup folder (relative to site root or absolute path) |
+| `keep_backups` | `14` | How many latest copies to keep (0 = unlimited) |
+| `prefer_mysqldump` | `1` | Use `mysqldump` if available |
+| `mysqldump_path` | `/usr/bin/mysqldump` | Absolute path to `mysqldump` |
+
+**Example of a secure configuration:**
+
+```
+backup_dir     = /var/backups/cotonti/dbbackdump   (outside public_html!)
+keep_backups   = 14
+prefer_mysqldump = 1
+mysqldump_path = /usr/bin/mysqldump
+```
+
+If the folder is outside `public_html` — download via browser will not work, but the dump/restore itself will. In that case, download via SSH/rsync.
+
+### 4.5. Verifying Operation
+
+1. Open **Tools → DB Backup**.
+2. Ensure the header displays:
+   - **Engine**: `mysqldump (native)` — if mysqldump is available;
+   - **Engine**: `pure-PHP (cursor)` — if not.
+3. Click **"Create Backup"**.
+4. Wait for completion — the progress bar should reach 100%.
+5. Check the `datas/dbbackdump/` folder — there should be a `backup_*.sql.gz` file and a `.log` file.
+6. Download the backup and open it with an archiver — there should be readable SQL inside.
+7. Delete the test backup (or keep it as the first working one).
+
+Done. The plugin is installed and working.
+
+---
+
+## 5. Step-by-Step Security Guide
+
+Backup security is a critical part. The dump contains **the entire** database: logins, passwords (as hashes), emails, private messages, IP addresses. A dump leak = full site compromise.
+
+Below are 10 steps to take after installation.
+
+### 5.1. Step 1: Choosing Backup Storage Location
+
+**Bad option:**
+
+```
+/var/www/site/public_html/datas/dbbackdump/
+```
+
+If the server ever serves the file via a direct link (and it will if `.htaccess` fails), anyone who knows the URL can download the dump.
+
+**Good option:**
+
+```
+/var/backups/cotonti/dbbackdump/
+```
+
+or any directory **outside** the site root. In the plugin settings, specify the absolute path:
+
+```
+backup_dir = /var/backups/cotonti/dbbackdump
+```
+
+Note: `data/`, `datas/`, `storage/` and similar directories are often **already** outside `public_html` — that's good. Check this on your hosting.
+
+### 5.2. Step 2: Protecting the Backup Directory
+
+If the folder is still inside `public_html` — the plugin will automatically create two files:
+
+- **`.htaccess`** (for Apache):
+  ```apache
+  Require all denied
+  Deny from all
+  Options -Indexes
+  ```
+- **`index.php`** — a stub for directories without `index`:
+  ```php
+  <?php http_response_code(403);
+  ```
+
+**Check** both files after the first plugin run. If they are missing — create them manually.
+
+**For Nginx:** `.htaccess` **does not work**. Add to the server config:
+
+```nginx
+location ^~ /datas/dbbackdump/ {
+    deny all;
+    return 403;
+}
+```
+
+**For LiteSpeed** `.htaccess` works, but check that `AllowOverride All` is enabled for your vhost.
+
+### 5.3. Step 3: File Permissions
+
+```bash
+chmod 755 /var/backups/cotonti/dbbackdump
+chmod 640 /var/backups/cotonti/dbbackdump/*.sql.gz
+chmod 640 /var/backups/cotonti/dbbackdump/.log
+chmod 640 /var/backups/cotonti/dbbackdump/.job.json
+```
+
+Never set `777` — this opens the folder for writing by any system user.
+
+### 5.4. Step 4: Protecting the AJAX Endpoint
+
+The AJAX endpoint (`index.php?r=dbbackdump`) is already protected by:
+
+- authorization check (`cot_auth('plug', 'dbbackdump', 'A')`);
+- XK token check (`cot_check_xg()`).
+
+**What can be strengthened:**
+
+- Add HTTP Basic Auth to `/index.php?r=dbbackdump` via `.htaccess` (double protection).
+- Restrict access by IP in `.htaccess`:
+  ```apache
+  <If "%{QUERY_STRING} =~ /r=dbbackdump/">
+      Require ip 203.0.113.42
+      Require ip 198.51.100.0/24
+  </If>
+  ```
+- Log all requests to the AJAX endpoint.
+
+### 5.5. Step 5: XK Tokens and CSRF
+
+Cotonti uses XK tokens (similar to CSRF tokens) for all state-changing actions. The plugin verifies the token on **every** AJAX request via `cot_check_xg()`.
+
+**What this provides:** even if an attacker tricks the admin into opening a malicious page, the browser cannot execute the request without the correct XK.
+
+**What can be improved:**
+
+- Ensure `Cot::$sys['xk']` does **not** leak into the JS console / third-party scripts.
+- Never disable `cot_check_xg()` under any circumstances.
+- If you use a CDN or third-party widgets — check that they do not read the `data-xk` attribute.
+
+### 5.6. Step 6: Separate MySQL User
+
+Do not use MySQL root for the site. Create a separate user:
+
+```sql
+CREATE USER 'cotonti_backup'@'localhost' IDENTIFIED BY 'strong_password_here';
+GRANT SELECT, LOCK TABLES, SHOW VIEW, EVENT, TRIGGER ON `your_db`.* TO 'cotonti_backup'@'localhost';
+-- For restore, also need:
+GRANT INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON `your_db`.* TO 'cotonti_backup'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+Set this user in the Cotonti config (`datas/config.php` → `$cfg['mysqluser']`, `$cfg['mysqlpassword']`).
+
+**Advantage:** if the password leaks through a dump/log, the attacker does not get root access.
+
+### 5.7. Step 7: mysqldump Security
+
+The plugin passes the MySQL password via the `MYSQL_PWD` environment variable, not via the command line. This means the **password is not visible in `ps aux`**.
+
+Check that on the server:
+
+- `mysqldump` does not have the suid bit (`ls -l $(which mysqldump)` — there should be no `s` in permissions);
+- `proc_open` and `exec` are not in `disable_functions` (if they are — pure-PHP is used);
+- `mysqldump` version ≥ MySQL server version (otherwise compatibility issues may occur).
+
+### 5.8. Step 8: HTTPS and Headers
+
+The plugin works over the same protocol as the admin panel. **Always** use HTTPS:
+
+- without HTTPS the XK token and dump contents can be intercepted;
+- admin cookies are transmitted in plain text (if the `Secure` flag is not set).
+
+Ensure that:
+
+- the server has a valid TLS certificate (Let's Encrypt);
+- HTTP redirects to HTTPS;
+- session cookies have the `Secure`, `HttpOnly`, `SameSite=Lax` (or `Strict`) flags.
+
+### 5.9. Step 9: Regular Audit
+
+Once a month:
+
+1. Check `.log` for errors and suspicious entries.
+2. Check the backup list — for any extra files.
+3. Check `.htaccess` — has it been modified.
+4. Check folder permissions — are they not `777`.
+5. Check that rotation works (old files are deleted).
+6. Perform a test restore on a **separate** copy of the site (staging).
+
+### 5.10. Step 10: Backing Up Your Backups
+
+**Golden rule:** 3-2-1.
+
+- **3** copies of data;
+- **2** different media;
+- **1** copy off-site (off the server).
+
+Minimum: once a week download a fresh backup and store it:
+
+- on a local computer;
+- in the cloud (Yandex.Disk, Google Drive, Dropbox, S3);
+- on a backup server.
+
+Automation via cron:
+
+```bash
+# Every day at 04:00 fetch all fresh dumps
+0 4 * * * rsync -avz --remove-source-files user@site:/var/backups/cotonti/dbbackdump/ /home/backup/cotonti/
+```
+
+---
+
+## 6. Step-by-Step Usage Guide
+
+### 6.1. Creating a Backup
+
+1. Open **Tools → DB Backup**.
+2. Ensure no process is running (progress bar is hidden).
+3. Click **"Create Backup"**.
+4. A progress bar and a **"Cancel"** button will appear.
+5. Wait for completion — status becomes `done`, progress 100%, page reloads.
+6. The new backup appears at the top of the table.
+
+**How long does it take?** Depends on database size and chosen engine:
+
+| Database Size | mysqldump | pure-PHP |
+|---------------|-----------|----------|
+| 10 MB         | 1-2 sec   | 3-5 sec  |
+| 100 MB        | 5-15 sec  | 30-60 sec |
+| 1 GB          | 1-2 min   | 5-15 min |
+| 10 GB         | 10-20 min | 1-3 hours |
+
+### 6.2. Downloading a Backup
+
+1. Find the required file in the table.
+2. Click **"Download"** — the file will start downloading.
+3. The file is served as `application/gzip` with the `Content-Disposition: attachment` header.
+
+**Attention:** download goes through the AJAX endpoint, i.e., via PHP. This means:
+
+- if you have `max_execution_time = 30` and the file takes longer to download — the process may be killed;
+- for large files (>1 GB) it's better to use SFTP/rsync.
+
+### 6.3. Restoring from a Backup
+
+⚠️ **Restore completely overwrites the current database.** All data created after the backup will be lost.
+
+1. **Enable maintenance mode.** In Cotonti this is done via the admin panel (Settings → General → Maintenance Mode) or manually.
+2. Ensure you have a **current** backup (just made) — in case the restore goes wrong.
+3. Open **Tools → DB Backup**.
+4. Find the required backup in the table.
+5. Click **"Restore"**.
+6. Confirm the action in the dialog.
+7. Wait for progress to complete — status becomes `done`.
+8. **Check `.log`** for SQL errors.
+9. Visit the site, check key pages.
+10. Disable maintenance mode.
+
+**If restore fails midway:** some tables are already overwritten, some are not. The only guaranteed fix is to run the restore again from the same backup. Do not try to "finish by hand" — you will almost always get inconsistent data.
+
+### 6.4. Deleting a Backup
+
+1. Find the file in the table.
+2. Click **"Delete"**.
+3. Confirm the action.
+4. The page reloads, the file disappears from the list.
+
+**Attention:** deletion is irreversible. The file is physically erased from disk.
+
+### 6.5. Cancelling an Operation
+
+1. If an operation is running — the **"Cancel"** button is available.
+2. Click it.
+3. The plugin sets the `cancelled` status in `.job.json`.
+4. The dump/restore process will see this on the next check (every 50 queries during restore, once per table during dump) and will interrupt.
+5. The backup file (during dump) will be deleted.
+
+**Attention:** cancellation is not instantaneous. During restore it may take a few seconds until the current batch of queries completes. During dump on large tables — likewise.
+
+---
+
+## 7. Possible Problems and Solutions
+
+### 7.1. Plugin Does Not Create Backup Directory
+
+**Symptom:** error "Cannot create /path/to/datas/dbbackdump".
+
+**Causes and solutions:**
+
+1. **No permissions on the parent directory.**
+   ```bash
+   chmod 755 /path/to/datas
+   ```
+   Or set `backup_dir` to an existing directory where you have write permissions.
+
+2. **Directory is outside `open_basedir` paths.**
+   Check `phpinfo()` → `open_basedir`. If the path is not included — set `backup_dir` within the allowed zone.
+
+3. **Disk is full.**
+   ```bash
+   df -h
+   ```
+   Free up space or move the folder.
+
+4. **SELinux / AppArmor blocks writing.**
+   ```bash
+   sudo restorecon -Rv /var/backups/cotonti/
+   ```
+   Or configure the policy.
+
+### 7.2. mysqldump Not Found
+
+**Symptom:** header displays `pure-PHP (cursor)` even though `prefer_mysqldump = 1`.
+
+**Causes and solutions:**
+
+1. **Incorrect path to `mysqldump`.**
+   ```bash
+   which mysqldump
+   # /usr/bin/mysqldump
+   ```
+   Set this path in the settings.
+
+2. **`exec()` in `disable_functions`.**
+   Check `phpinfo()` → `disable_functions`. If `exec` or `proc_open` is there — use pure-PHP (just disable `prefer_mysqldump`).
+
+3. **`mysqldump` is not installed.**
+   ```bash
+   sudo apt install mysql-client       # Debian/Ubuntu
+   sudo yum install mysql              # CentOS/RHEL
+   ```
+
+4. **No execution permissions.**
+   ```bash
+   ls -l $(which mysqldump)   # should be -rwxr-xr-x
+   ```
+
+### 7.3. Timeout and Connection Drop
+
+**Symptom:** process starts but after 30-60 seconds fails with 504 Gateway Timeout or 500.
+
+**Causes and solutions:**
+
+1. **`max_execution_time`.**
+   The plugin calls `set_time_limit(0)`, but on some hostings this is prohibited. Check:
+   ```bash
+   php -i | grep max_execution_time
+   ```
+   If it's `30` and cannot be overridden — contact hosting support.
+
+2. **Nginx `fastcgi_read_timeout`.**
+   ```nginx
+   fastcgi_read_timeout 3600s;
+   fastcgi_send_timeout 3600s;
+   ```
+   Reload nginx: `sudo systemctl reload nginx`.
+
+3. **Apache `TimeOut`.**
+   ```apache
+   TimeOut 3600
+   ```
+   Or via `.htaccess`:
+   ```apache
+   <IfModule mod_reqtimeout.c>
+       RequestReadTimeout header=0 body=0
+   </IfModule>
+   ```
+
+4. **Cloudflare / CDN.**
+   Cloudflare by default cuts requests >100 seconds. Enable **"Bypass Cache"** for URL `index.php?r=dbbackdump*` or disable proxying for the admin panel.
+
+5. **Load balancer.**
+   If the site is behind an LB — increase `idle timeout` to 1 hour.
+
+### 7.4. Large Databases
+
+**Symptom:** dump of a large database (>5 GB) fails, gzip file is corrupted.
+
+**Solutions:**
+
+1. **Use mysqldump.** Pure-PHP for 10+ GB is hours of work. With mysqldump — minutes.
+2. **Split tables.** If there are giant tables (logs, cache) — exclude them from the dump or dump them separately.
+3. **Increase `memory_limit`.**
+   ```ini
+   memory_limit = 2048M
+   ```
+4. **Check `tmpdir`.** When working with large tables, MySQL may write temporary files. Ensure there is enough space:
+   ```bash
+   df -h /tmp
+   ```
+
+### 7.5. Error 500 During Dump
+
+**Symptom:** AJAX request fails with HTTP 500, nothing is written to `.log`.
+
+**Causes and solutions:**
+
+1. **Fatal PHP error.** Check the PHP `error_log`:
+   ```bash
+   tail -f /var/log/php/error.log
+   ```
+   Or in the hosting panel.
+
+2. **Exceeded `memory_limit`.** Increase to 512-1024 MB.
+
+3. **`proc_open` not allowed.** Disable `prefer_mysqldump`.
+
+4. **SQL parsing error in pure-PHP.** Check that PHP version ≥ 8.5.
+
+### 7.6. Tables Not Restored
+
+**Symptom:** progress reaches 100%, but data does not appear. In `.log` — nothing.
+
+**Cause:** this was a classic problem with `$i` reset in older plugin versions. If your version < 3.0.1 — update.
+
+**Check:** the log should contain `RESTORE OK`. If not — the process failed silently, look for the cause in the PHP `error_log`.
+
+**If version ≥ 3.0.1 and still not working:**
+
+1. Check that the SQL dump is valid. Unpack gzip and look at it:
+   ```bash
+   gunzip -c backup_*.sql.gz | head -100
+   ```
+2. Check that the dump contains the required tables:
+   ```bash
+   gunzip -c backup_*.sql.gz | grep -c "^INSERT INTO"
+   ```
+3. Check `.log` for specific SQL errors. If there is `SQL error` — the plugin "swallowed" the problematic query. Find it by `SQL head:` and figure it out manually.
+
+### 7.7. Memory Limit Exceeded
+
+**Symptom:** `Allowed memory size of XXX bytes exhausted`.
+
+**Solutions:**
+
+1. Increase `memory_limit` to 1024 MB.
+2. The plugin already sets `ini_set('memory_limit', '1024M')`, but if the hosting blocks `ini_set` — it won't help. Then use pure-PHP (not mysqldump) or split the database.
+
+### 7.8. Garbled Characters Instead of Cyrillic
+
+**Symptom:** after restore, instead of Russian letters — `????` or `ÐŸÑ€Ð¸Ð²ÐµÑ‚`.
+
+**Causes and solutions:**
+
+1. **Dump in a different encoding.** Check the dump header:
+   ```bash
+   gunzip -c backup_*.sql.gz | head -5
+   ```
+   Should be `SET NAMES utf8mb4;`.
+
+2. **Database not in `utf8mb4`.** Check:
+   ```sql
+   SHOW CREATE DATABASE my_db;
+   ```
+   If the encoding is not `utf8mb4` — the plugin is not to blame, the problem is in the source database.
+
+3. **Connection not in `utf8mb4`.** Check `datas/config.php` → `$cfg['mysqlcharset']`.
+
+### 7.9. Interrupted Dump Still Hanging
+
+**Symptom:** `.job.json` contains `status=running`, but no process is running. The "Create Backup" button is disabled.
+
+**Solution:** delete `.job.json` manually:
+
+```bash
+rm /path/to/backups/.job.json
+```
+
+**Attention:** before deleting, ensure the process is **definitely** not running (`ps aux | grep php`). Otherwise you will remove the "bridge" between the process and the UI, but the process will continue working.
+
+### 7.10. Progress Bar Not Moving
+
+**Symptom:** progress bar is stuck at 0% or N%, not moving.
+
+**Causes and solutions:**
+
+1. **`setInterval` in JS stopped.** Check the browser console for errors.
+2. **AJAX request `status` returns 403 or 500.** Check Network in DevTools.
+3. **XK token expired.** Reload the page.
+4. **`.job.json` file is not being written.** Check permissions on the backup folder (755) and on the file itself (640).
+5. **Long table.** On large tables progress may stand still for minutes. Just wait.
+
+---
+
+## 8. Logs and Diagnostics
+
+### 8.1. Where to Look
+
+| What | Where |
+|------|-------|
+| Plugin log | `datas/dbbackdump/.log` |
+| Current state | `datas/dbbackdump/.job.json` |
+| PHP errors | `/var/log/php/error.log`, site `error_log` |
+| MySQL errors | `/var/log/mysql/error.log` |
+| Apache errors | `/var/log/apache2/error.log` |
+| Nginx errors | `/var/log/nginx/error.log` |
+
+### 8.2. What to Check First
+
+1. **`.job.json`** — what status.
+2. **`.log`** — is there `SQL error`, `DUMP FAIL`, `RESTORE FAIL`.
+3. **DevTools → Network** — what AJAX requests are going, what they return.
+4. **DevTools → Console** — are there JS errors.
+5. **PHP `error_log`** — are there fatal errors.
+
+### 8.3. Enabling Verbose Logging
+
+Cotonti can log SQL queries in development mode. In `datas/config.php`:
+
+```php
+$cfg['debug_mode'] = true;
+$cfg['devmode'] = true;
+```
+
+After that, all plugin queries (including restore) will be visible in the Cotonti debug panel with execution time and stack trace.
+
+**Attention:** do not leave these flags enabled on production.
+
+---
+
+## 9. FAQ — Frequently Asked Questions
+
+### General
+
+**Q: Does the plugin make backups on a schedule?**
+
+A: No. Scheduling is a cron task, not a plugin task. Set up an external cron that calls the AJAX endpoint `start_dump` with a valid XK.
+
+**Q: Can the plugin back up files (images, attachments)?**
+
+A: No. Only the database. For files use `tar`/`rsync`.
+
+**Q: Does the plugin work with PostgreSQL?**
+
+A: No. Only MySQL and MariaDB.
+
+**Q: Does the plugin work on Cotonti Verona?**
+
+A: Yes, starting from version 3.0.0. The plugin is designed for Cotonti Verona 1.0.x (PHP 8.5).
+
+**Q: What to do if the hosting disables `proc_open`?**
+
+A: The plugin will automatically switch to the pure-PHP engine. Just make sure `prefer_mysqldump` does not interfere.
+
+**Q: Can I restore a single table?**
+
+A: Not natively. But you can unpack the `.sql.gz` and extract the required `INSERT INTO`, then execute it manually via phpMyAdmin.
+
+### Security
+
+**Q: Are dumps accessible from the browser via a direct link?**
+
+A: No, if `.htaccess` or Nginx config is correct. Check manually.
+
+**Q: What if `.htaccess` doesn't work (Nginx)?**
+
+A: Add `location ^~ /path/to/backups/ { deny all; }` to the Nginx config.
+
+**Q: Does the MySQL password get into logs?**
+
+A: No, the plugin passes the password via `MYSQL_PWD`, not via command-line arguments.
+
+**Q: Is HTTPS required?**
+
+A: Absolutely. Without HTTPS the XK token and dump contents can be intercepted.
+
+**Q: Can I give access to the plugin to non-admins?**
+
+A: No. Only admins with the `plug.dbbackdump.A` permission.
+
+### Usage
+
+**Q: How long does creating a backup take?**
+
+A: Depends on database size and engine. See the table in section 6.1.
+
+**Q: Can I run two dumps simultaneously?**
+
+A: No. The second request will return the status of the first.
+
+**Q: What to do if the dump fails midway?**
+
+A: Check `.log` and PHP `error_log`. Usually it's `memory_limit`, `max_execution_time`, or an SQL error.
+
+**Q: What to do if restore fails midway?**
+
+A: Run it again. Do not try to "finish by hand".
+
+**Q: How to cancel an operation?**
+
+A: The "Cancel" button in the UI. Cancellation is not instantaneous.
+
+**Q: Where are backups stored?**
+
+A: In the folder specified in `backup_dir`. Default is `datas/dbbackdump`.
+
+**Q: How to change the backup folder?**
+
+A: In the plugin settings.
+
+**Q: How to change the number of stored copies?**
+
+A: The `keep_backups` parameter.
+
+**Q: How to disable rotation?**
+
+A: Set `keep_backups = 0`.
+
+### Problems
+
+**Q: Plugin does not see old backups.**
+
+A: Check the file extension — only `.sql.gz`. Check read permissions.
+
+**Q: Progress bar is not moving.**
+
+A: Check Network in DevTools. Possibly the XK token expired — reload the page.
+
+**Q: Error "Call to undefined method CotDB::exec()".**
+
+A: This was a bug in old plugin versions. Update to 3.0.1+. In new versions `CotDB::query()` is used everywhere.
+
+**Q: Restore completed but data did not appear.**
+
+A: Check `.log` for `SQL error`. Most likely one of the queries failed. Find it by `SQL head:` and figure it out manually.
+
+**Q: Garbled characters after restore.**
+
+A: Check database and connection encoding (`utf8mb4`).
+
+**Q: Large table takes long to restore.**
+
+A: Normal. Pure-PHP restore of 10+ GB can take hours. Use mysqldump for dump and `mysql < backup.sql` via SSH for restore.
+
+---
+
+## 10. Plugin Update
+
+1. **Make a database backup** using the standard method.
+2. Download the new version from GitHub.
+3. In the Cotonti admin panel → Extensions → dbbackdump → **"Update"**.
+4. If updating via the admin panel is not available — unpack over the old folder, preserving `datas/dbbackdump/` with backups.
+5. Check the plugin settings — new parameters are sometimes added.
+6. Make a test dump to verify.
+
+---
+
+## 11. Plugin Removal
+
+1. Make a final database backup.
+2. Download all necessary backups from the `datas/dbbackdump/` folder — **they are not deleted when the plugin is removed**, but it's better to be safe.
+3. In the Cotonti admin panel → Extensions → dbbackdump → **"Delete"**.
+4. Delete the `/plugins/dbbackdump/` folder manually if it remains.
+5. Delete the `datas/dbbackdump/` folder manually if not needed.
+
+---
+
+## 12. Roadmap
+
+- [ ] CLI mode for running from cron without HTTP.
+- [ ] Storing backups in S3-compatible storage.
+- [ ] On-the-fly dump encryption (age, gpg).
+- [ ] PostgreSQL support.
+- [ ] Selective restore of individual tables.
+- [ ] Differential dumps.
+- [ ] Web interface for viewing `.log`.
+- [ ] Email notifications after dump completion.
+
+---
+
+## 13. Changelog
+
+### v3.0.1 (2026-10-16)
+
+- Fixed a bug with the SQL parser in `dbbackdump_run_restore()`: resetting `$i` inside the `fread` loop caused silent skipping of INSERTs.
+- Improved SQL error logging — now `SQL head` is written (first 300 characters of the problematic query).
+- Admin panel layout migrated to Bootstrap 5.3.
+- All hardcoded Russian strings moved to `.lang.php`.
+- Fixed outdated requirements: PHP 8.5, Cotonti Verona 1.0.x.
+
+### v3.0.0 (2026-10-01)
+
+- Completely rewritten from scratch.
+- Two engines: mysqldump and pure-PHP cursor.
+- Streaming restore without loading into memory.
+- Real-time progress via AJAX.
+- Operation cancellation.
+- Automatic backup folder protection.
+
+---
+
+## 14. Contributing
+
+Pull requests are welcome. Before submitting:
+
+1. Fork the repository.
+2. Create a branch `feature/your-feature` or `fix/your-bug`.
+3. Follow PSR-12.
+4. Add tests if possible.
+5. Update `README.md` and `CHANGELOG`.
+6. Submit a PR with a description: what, why, how to test.
+
+---
+
+## 15. License
+
+BSD 3-Clause. See `License.txt`.
+
+---
+
+## 16. Contacts and Support
+
+- **GitHub Issues:** [github.com/webitproff/dbbackdump-cotonti/issues](https://github.com/webitproff/dbbackdump-cotonti/issues)
+- **Cotonti Forum:** [abuyfile.com/ru/forums/cotonti/custom/plugs](https://abuyfile.com/ru/forums/cotonti/custom/plugs)
+- **Author:** webitproff
+
+
+___
+
+# РУССКИЙ
+
 # DB Backup (dbbackdump) для Cotonti
 
 [![Version](https://img.shields.io/badge/version-3.0.1-blue.svg)](https://github.com/webitproff/dbbackdump-cotonti)
